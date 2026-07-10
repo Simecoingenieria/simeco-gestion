@@ -3,7 +3,11 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "scripts": { "dev": "vite", "build": "vite build", "preview": "vite preview" },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
     "lucide-react": "^0.383.0",
@@ -20,21 +24,3 @@
     "vite-plugin-pwa": "^0.20.0"
   }
 }
-→ En GitHub: abre package.json → lápiz ✏️ → Ctrl+A → pega esto → Commit.
-App.jsx: este sí es muy largo para copiar a mano sin riesgo de error. Descárgalo de la tarjeta que te compartí arriba, y en GitHub: entra a App.jsx actual → 🗑️ (eliminar) → Commit → luego "Add file → Upload files" → sube el descargado → Commit.
-¿Prefieres instalar Claude para Chrome para que esto se resuelva solo, o seguimos con la ruta manual paso a paso una vez más?donde veo package.jsonpackage.json está en la raíz de tu repositorio — no dentro de la carpeta src, sino un nivel más arriba, junto a src.
-Cómo llegar ahí
-
-En GitHub, ve a la página principal de tu repositorio: github.com/Simecoingenieria/simeco-gestion
-Ahí, justo en el primer listado de archivos (antes de entrar a ninguna carpeta), deberías ver algo así:
-
-📁 src
-📄 package.json
-📄 index.html
-(y algunos otros archivos de configuración)
-
-
-Haz clic directo en package.json
-
-Si estás actualmente dentro de la carpeta src (donde vimos App.jsx, storagePolyfill.js, etc.), solo haz clic en el link simeco-gestion que aparece arriba en la ruta de navegación (breadcrumb) — eso te devuelve a la raíz del repositorio, donde sí vas a ver package.json.
-¿Lo encuentras ahí?¿Quieres recibir una notifica
