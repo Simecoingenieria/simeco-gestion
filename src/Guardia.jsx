@@ -166,4 +166,16 @@ function Login() {
   );
 }
 
-/* --------------------------------------------------
+/* -------------------------------------------------------------------- */
+
+function BotonSalir({ correo }) {
+  return (
+    <button
+      onClick={() => supabase.auth.signOut()}
+      title={correo}
+      className="fixed bottom-4 right-4 z-50 rounded-full border border-slate-300 bg-white/90 px-3.5 py-1.5 text-xs font-semibold text-slate-600 shadow-sm backdrop-blur transition hover:bg-white hover:text-slate-900"
+    >
+      Salir
+    </button>
+  );
+}
