@@ -80,7 +80,7 @@ function Field({ label, children, span }) {
 }
 
 const inputCls =
-  "w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:border-[#C97A2B] focus:ring-2 focus:ring-[#C97A2B]/20";
+  "w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:border-[#1F3088] focus:ring-2 focus:ring-[#1F3088]/20";
 
 function TextInput(props) {
   return <input {...props} className={inputCls + " " + (props.className || "")} />;
@@ -170,7 +170,7 @@ function LineItems({ label, items, setItems }) {
         <button
           type="button"
           onClick={() => setItems([...items, { desc: "", cant: 1, und: "und", valorUnit: 0 }])}
-          className="flex items-center gap-1 text-xs font-medium text-[#C97A2B] hover:underline"
+          className="flex items-center gap-1 text-xs font-medium text-[#1F3088] hover:underline"
         >
           <Plus size={12} /> Ítem
         </button>
@@ -259,7 +259,7 @@ function LineItemsMateriales({ label, items, setItems, catalogo }) {
           <button
             type="button"
             onClick={() => setItems([...items, { desc: "", cant: 1, und: "und", valorUnit: 0 }])}
-            className="flex items-center gap-1 text-xs font-medium text-[#C97A2B] hover:underline"
+            className="flex items-center gap-1 text-xs font-medium text-[#1F3088] hover:underline"
           >
             <Plus size={12} /> Ítem
           </button>
@@ -408,7 +408,7 @@ function ItemsConImportar({ label, items, setItems, unidadLabel = "Und", claveUn
             {importando ? "Leyendo..." : "Importar Excel"}
             <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={importarExcel} disabled={importando} />
           </label>
-          <button type="button" onClick={add} className="flex items-center gap-1 text-xs font-medium text-[#C97A2B] hover:underline">
+          <button type="button" onClick={add} className="flex items-center gap-1 text-xs font-medium text-[#1F3088] hover:underline">
             <Plus size={12} /> Ítem
           </button>
         </div>
@@ -638,14 +638,12 @@ export default function App() {
 
       {/* SIDEBAR */}
       <aside className="no-print flex w-60 shrink-0 flex-col border-r border-slate-800 bg-[#1B2430]">
-        <div className="flex items-center gap-2 border-b border-white/10 px-5 py-5">
-          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-[#C97A2B]">
-            <Building2 size={16} className="text-white" />
-          </div>
-          <div>
-            <p className="font-display text-sm font-semibold text-white leading-tight">SIMECO</p>
-            <p className="text-[10px] uppercase tracking-wider text-slate-400">Ingeniería · Gestión</p>
-          </div>
+        <div className="border-b border-white/10 bg-white px-4 py-3.5">
+          <img
+            src="/logo-simeco.png"
+            alt="SIMECO Ingeniería para la Industria"
+            className="h-10 w-auto"
+          />
         </div>
         <nav className="flex-1 space-y-0.5 px-3 py-4">
           {NAV.map((n) => {
@@ -656,7 +654,7 @@ export default function App() {
                 key={n.key}
                 onClick={() => setTab(n.key)}
                 className={`flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm transition ${
-                  active ? "bg-[#C97A2B] text-white font-medium" : "text-slate-300 hover:bg-white/5"
+                  active ? "bg-[#1F3088] text-white font-medium" : "text-slate-300 hover:bg-white/5"
                 }`}
               >
                 <Icon size={15} />
@@ -986,7 +984,7 @@ function RequerimientosView({ data, update, clientName, reloadRequirements, load
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {data.requirements.map((r) => (
-            <div key={r.id} className="rounded-xl border border-slate-200 bg-white p-4 cursor-pointer hover:border-[#C97A2B]/50" onClick={() => setPanel(r)}>
+            <div key={r.id} className="rounded-xl border border-slate-200 bg-white p-4 cursor-pointer hover:border-[#1F3088]/50" onClick={() => setPanel(r)}>
               <div className="flex items-start justify-between">
                 <p className="font-medium text-slate-800">{clientName(r.clientId) !== "—" ? clientName(r.clientId) : r._clienteGuardado || "—"}</p>
                 <span className="font-mono text-[11px] text-slate-400">{r.fecha}</span>
@@ -1004,7 +1002,7 @@ function RequerimientosView({ data, update, clientName, reloadRequirements, load
                 {onCotizar && (
                   <button
                     onClick={() => onCotizar(r.id)}
-                    className="flex items-center gap-1 rounded-md bg-[#C97A2B]/10 px-2.5 py-1 text-xs font-medium text-[#C97A2B] hover:bg-[#C97A2B]/20"
+                    className="flex items-center gap-1 rounded-md bg-[#1F3088]/10 px-2.5 py-1 text-xs font-medium text-[#1F3088] hover:bg-[#1F3088]/20"
                   >
                     <FileText size={12} /> Cotizar
                   </button>
@@ -1304,7 +1302,7 @@ function CotizacionesView({ data, update, bumpCounter, clientName, prefillReqId,
       <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
         {summary.map((s) => (
           <button key={s.estado} onClick={() => setFilterEstado(filterEstado === s.estado ? "Todas" : s.estado)}
-            className={`rounded-lg border p-3 text-left transition ${filterEstado === s.estado ? "border-[#C97A2B] bg-[#C97A2B]/5" : "border-slate-200 bg-white"}`}>
+            className={`rounded-lg border p-3 text-left transition ${filterEstado === s.estado ? "border-[#1F3088] bg-[#1F3088]/5" : "border-slate-200 bg-white"}`}>
             <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{s.estado}</p>
             <p className="font-display text-lg font-semibold text-slate-800">{s.count}</p>
             <p className="text-[11px] text-slate-400">{cop(s.value)}</p>
@@ -1479,11 +1477,11 @@ function CotizacionForm({ initial, clients, requirements, prefillReqId, catalogo
         <Field label="Margen bruto (%)"><TextInput type="number" value={f.margenPct} onChange={(e) => set("margenPct", e.target.value)} /></Field>
       </div>
 
-      <div className="mt-4 rounded-lg border border-[#C97A2B]/30 bg-[#C97A2B]/5 p-4">
+      <div className="mt-4 rounded-lg border border-[#1F3088]/30 bg-[#1F3088]/5 p-4">
         <div className="flex justify-between text-sm text-slate-600"><span>Costo directo</span><span>{cop(calc.directos)}</span></div>
         <div className="flex justify-between text-sm text-slate-600"><span>Costos indirectos</span><span>{cop(calc.indirectos)}</span></div>
         <div className="flex justify-between text-sm text-slate-600"><span>Costos financieros</span><span>{cop(calc.financieros)}</span></div>
-        <div className="flex justify-between text-sm text-slate-600 border-t border-[#C97A2B]/20 mt-1 pt-1"><span>Costo total</span><span>{cop(calc.costoTotal)}</span></div>
+        <div className="flex justify-between text-sm text-slate-600 border-t border-[#1F3088]/20 mt-1 pt-1"><span>Costo total</span><span>{cop(calc.costoTotal)}</span></div>
         <div className="mt-1 flex justify-between font-display text-lg font-semibold text-[#1B2430]"><span>Precio de venta</span><span>{cop(calc.precioVenta)}</span></div>
       </div>
 
