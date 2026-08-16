@@ -1,204 +1,173 @@
+
 // =====================================================================
-// SIMECO GESTIÓN · storagePolyfill.js — VERSIÓN NUBE (v3)
+// SIMECO GESTIÓN · Guardia.jsx — la puerta de entrada
 //
 // QUÉ HACE
 // --------
-// La versión que está hoy en GitHub guarda en localStorage: una gaveta
-// privada dentro del navegador de CADA equipo. Por eso el celular y el
-// PC ven datos distintos.
+// Es un envoltorio. Se pone alrededor de la app entera y decide:
+//   · ¿No hay sesión?  → muestra el formulario de login y nada más.
+//   · ¿Hay sesión?     → deja pasar y muestra la app normal.
 //
-// Esta versión guarda en Supabase, en la tabla app_storage, y usa
-// localStorage solo como copia de respaldo para dos cosas:
-//   1. Que la app abra rápido, sin esperar la red.
-//   2. Que si te quedas sin internet, sigas viendo la última versión.
-//
-// App.jsx NO SE TOCA. Ni una línea. La app llama a window.storage.get()
-// y window.storage.set() igual que antes; lo único que cambia es a dónde
-// van esos datos por dentro. Eso es una "interfaz": el enchufe queda
-// igual, cambia lo que hay detrás de la pared.
-//
-// POR QUÉ app_storage Y NO OTRA TABLA
-// -----------------------------------
-// La tabla app_storage ya existía en la base, con datos dentro, y con
-// las columnas exactas de esta API: key, scope, value, updated_at.
-// Además tiene un disparador (trg_app_storage_log) que anota cada cambio
-// en app_storage_log — una pista de auditoría automática. Se respeta lo
-// que ya estaba construido en vez de duplicarlo.
-//
-// TODO VA CON scope = 'shared'
+// EL MISMO TRUCO DE LA CLASE 1
 // ----------------------------
-// App.jsx llama a estas funciones con shared = false, que en la versión
-// vieja significaba "privado de este navegador". Aquí se ignora a
-// propósito: el objetivo es justamente COMPARTIR entre equipos, y los
-// datos que ya están en la tabla se guardaron con scope 'shared'.
+// App.jsx NO SE TOCA. Otra vez. En React, un componente puede recibir a
+// otro adentro (eso es "children"), y así le pones un filtro delante sin
+// modificarlo por dentro. Es como poner un torniquete en la entrada del
+// edificio: las oficinas siguen igual.
 //
-// LÍMITE CONOCIDO (y aceptado por ahora)
-// --------------------------------------
-// Todo el estado va en una sola fila. Si dos personas editan al mismo
-// tiempo desde equipos distintos, gana quien guarde de último. Para 2-3
-// personas que no trabajan sobre lo mismo a la vez, funciona. Cuando el
-// equipo crezca, se parte en tablas separadas.
+// El cambio en main.jsx son 3 líneas. Nada más.
+//
+// NO HAY BOTÓN DE "REGISTRARSE", Y ES A PROPÓSITO
+// -----------------------------------------------
+// Los usuarios los creas tú desde el panel de Supabase. Si hubiera un
+// botón de registro, cualquiera que encuentre la dirección se crearía
+// una cuenta y entraría. La app solo deja iniciar sesión, no crearla.
 // =====================================================================
-
+ 
+import { useState, useEffect } from "react";
 import { supabase } from "./supabaseClient";
-
-const TABLA = "app_storage";
-const SCOPE = "shared";
-
-function claveLocal(key) {
-  return `simeco:shared:${key}`;
+ 
+export default function Guardia({ children }) {
+  // sesion === undefined → todavía no sabemos (estamos preguntando)
+  // sesion === null      → no hay nadie con login
+  // sesion === {...}     → hay usuario
+  const [sesion, setSesion] = useState(undefined);
+ 
+  useEffect(() => {
+    // 1. ¿Hay una sesión guardada de la última vez? Supabase la recuerda
+    //    en el navegador, así que no hay que entrar cada mañana.
+    supabase.auth.getSession().then(({ data }) => setSesion(data.session));
+ 
+    // 2. Quedarse escuchando: si entra o sale, la pantalla reacciona sola.
+    const { data: sub } = supabase.auth.onAuthStateChange((_evento, s) => {
+      setSesion(s);
+    });
+ 
+    // 3. Al desmontar el componente, dejamos de escuchar. Si no se hace,
+    //    quedan "escuchas" colgados consumiendo memoria.
+    return () => sub.subscription.unsubscribe();
+  }, []);
+ 
+  if (sesion === undefined) return <Cargando />;
+  if (!sesion) return <Login />;
+ 
+  return (
+    <>
+      {children}
+      <BotonSalir correo={sesion.user?.email} />
+    </>
+  );
 }
-
-// Clave que usaba la versión vieja del archivo (shared = false → "user").
-// Se consulta para rescatar datos de equipos que nunca subieron nada.
-function claveVieja(key) {
-  return `simeco:user:${key}`;
+ 
+/* -------------------------------------------------------------------- */
+ 
+function Cargando() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-slate-50">
+      <p className="text-sm text-slate-400">Cargando…</p>
+    </div>
+  );
 }
-
-function leerLocal(clave) {
-  try {
-    return localStorage.getItem(clave);
-  } catch {
-    return null; // navegador en modo privado o sin permisos
-  }
-}
-
-function escribirLocal(clave, texto) {
-  try {
-    localStorage.setItem(clave, texto);
-  } catch {
-    /* sin espacio o sin permisos — la verdad está en la nube */
-  }
-}
-
-// ¿Este texto JSON trae algo, o es un cascarón vacío?
-// Sirve para no dar por buena una fila recién creada y en blanco.
-function tieneContenido(texto) {
-  if (!texto) return false;
-  try {
-    const o = JSON.parse(texto);
-    return o && typeof o === "object" && Object.keys(o).length > 0;
-  } catch {
-    return String(texto).trim().length > 2;
-  }
-}
-
-// Guardar en la nube. Se hace UPDATE y, si no existía la fila, INSERT.
-// Se evita "upsert" a propósito: eso depende de cómo esté definida la
-// restricción única de la tabla, y así funciona sin suponer nada.
-async function guardarEnNube(key, value) {
-  const { data, error } = await supabase
-    .from(TABLA)
-    .update({ value, updated_at: new Date().toISOString() })
-    .eq("key", key)
-    .eq("scope", SCOPE)
-    .select("key");
-
-  if (error) return error;
-  if (data && data.length > 0) return null; // ya existía y se actualizó
-
-  const { error: errIns } = await supabase
-    .from(TABLA)
-    .insert({ key, scope: SCOPE, value });
-  return errIns || null;
-}
-
-window.storage = {
-  // -------------------------------------------------------------------
-  // get(key) — traer un bloque de datos
-  //
-  // Orden de intentos:
-  //   1. La nube, si trae datos de verdad. Es la fuente de la verdad.
-  //   2. Si la nube está vacía, el respaldo local (nuevo o de la versión
-  //      vieja) y de paso lo sube, para que quede compartido.
-  //   3. Si no hay nada en ninguna parte, lanza un error — que es lo que
-  //      App.jsx espera cuando aún no hay datos (lo atrapa con try/catch
-  //      y arranca con la app vacía).
-  // -------------------------------------------------------------------
-  async get(key, shared = false) {
-    const { data, error } = await supabase
-      .from(TABLA)
-      .select("value")
-      .eq("key", key)
-      .eq("scope", SCOPE)
-      .maybeSingle(); // "espero 0 o 1 fila, no me revientes si es 0"
-
-    // --- Caso 1: la nube tiene datos ---
-    if (!error && data && tieneContenido(data.value)) {
-      escribirLocal(claveLocal(key), data.value);
-      return { key, value: data.value, shared: true };
-    }
-
-    // --- Caso 2: la nube está vacía o no respondió. Buscamos respaldo ---
-    const respaldo = leerLocal(claveLocal(key)) ?? leerLocal(claveVieja(key));
-
-    if (respaldo !== null) {
-      // Si la nube respondió bien pero venía vacía, sembramos lo que había
-      // en este equipo. Si no respondió (red caída), NO subimos nada.
-      if (!error && tieneContenido(respaldo)) {
-        const err = await guardarEnNube(key, respaldo);
-        if (!err) escribirLocal(claveLocal(key), respaldo);
-      }
-      return { key, value: respaldo, shared: true };
-    }
-
-    // --- Caso 3: no hay nada. La app arranca en blanco ---
-    throw new Error("Key not found: " + key);
-  },
-
-  // -------------------------------------------------------------------
-  // set(key, value) — guardar un bloque de datos
-  //
-  // Primero el respaldo local (instantáneo, nunca falla feo) y después
-  // la nube. Si la nube falla, lanza el error para que App.jsx muestre
-  // el aviso "No se pudo guardar".
-  // -------------------------------------------------------------------
-  async set(key, value, shared = false) {
-    escribirLocal(claveLocal(key), value);
-
-    const error = await guardarEnNube(key, value);
+ 
+/* -------------------------------------------------------------------- */
+ 
+function Login() {
+  const [correo, setCorreo] = useState("");
+  const [clave, setClave] = useState("");
+  const [error, setError] = useState("");
+  const [entrando, setEntrando] = useState(false);
+ 
+  const entrar = async (e) => {
+    e.preventDefault(); // evita que el navegador recargue la página
+    setEntrando(true);
+    setError("");
+ 
+    const { error } = await supabase.auth.signInWithPassword({
+      email: correo.trim(),
+      password: clave,
+    });
+ 
+    // Si sale bien, no hacemos nada aquí: el onAuthStateChange de arriba
+    // se entera solo y cambia la pantalla.
     if (error) {
-      throw new Error("No se pudo guardar en la nube: " + error.message);
+      // A propósito NO decimos "ese correo no existe" ni "la contraseña
+      // está mala". Un mensaje genérico evita que alguien vaya probando
+      // correos para descubrir cuáles son válidos.
+      setError("Correo o contraseña incorrectos.");
+      setEntrando(false);
     }
-    return { key, value, shared: true };
-  },
-
-  // -------------------------------------------------------------------
-  // delete(key) — borrar un bloque
-  // -------------------------------------------------------------------
-  async delete(key, shared = false) {
-    try {
-      localStorage.removeItem(claveLocal(key));
-    } catch {
-      /* da igual */
-    }
-
-    const { error } = await supabase
-      .from(TABLA)
-      .delete()
-      .eq("key", key)
-      .eq("scope", SCOPE);
-
-    if (error) {
-      throw new Error("No se pudo borrar en la nube: " + error.message);
-    }
-    return { key, deleted: true, shared: true };
-  },
-
-  // -------------------------------------------------------------------
-  // list(prefix) — listar las claves guardadas
-  //
-  // La app hoy no la usa, pero se mantiene para no romper la interfaz.
-  // "like 'prefijo%'" en SQL es lo mismo que "empieza por".
-  // -------------------------------------------------------------------
-  async list(prefix = "", shared = false) {
-    const { data, error } = await supabase
-      .from(TABLA)
-      .select("key")
-      .eq("scope", SCOPE)
-      .like("key", `${prefix}%`);
-
-    if (error || !data) return { keys: [], prefix, shared: true };
-    return { keys: data.map((f) => f.key), prefix, shared: true };
-  },
-};
+  };
+ 
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
+      <form
+        onSubmit={entrar}
+        className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-7 shadow-sm"
+      >
+        <h1 className="text-lg font-semibold tracking-tight text-slate-900">
+          SIMECO Gestión
+        </h1>
+        <p className="mt-1 mb-6 text-sm text-slate-500">
+          Herramienta interna. Inicia sesión para continuar.
+        </p>
+ 
+        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+          Correo
+        </label>
+        <input
+          type="email"
+          required
+          autoComplete="username"
+          value={correo}
+          onChange={(e) => setCorreo(e.target.value)}
+          className="mb-4 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+        />
+ 
+        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+          Contraseña
+        </label>
+        <input
+          type="password"
+          required
+          autoComplete="current-password"
+          value={clave}
+          onChange={(e) => setClave(e.target.value)}
+          className="mb-5 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+        />
+ 
+        {error && (
+          <div className="mb-4 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-600">
+            {error}
+          </div>
+        )}
+ 
+        <button
+          type="submit"
+          disabled={entrando}
+          className="w-full rounded-md bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:opacity-50"
+        >
+          {entrando ? "Entrando…" : "Entrar"}
+        </button>
+ 
+        <p className="mt-5 text-center text-[11px] leading-relaxed text-slate-400">
+          ¿Sin cuenta o clave olvidada? Las cuentas se crean desde el panel
+          de Supabase.
+        </p>
+      </form>
+    </div>
+  );
+}
+ 
+/* -------------------------------------------------------------------- */
+ 
+function BotonSalir({ correo }) {
+  return (
+    <button
+      onClick={() => supabase.auth.signOut()}
+      title={correo}
+      className="fixed bottom-4 right-4 z-50 rounded-full border border-slate-300 bg-white/90 px-3.5 py-1.5 text-xs font-semibold text-slate-600 shadow-sm backdrop-blur transition hover:bg-white hover:text-slate-900"
+    >
+      Salir
+    </button>
+  );
+}
