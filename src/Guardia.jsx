@@ -1,4 +1,5 @@
-SIMECO GESTIÓN · Guardia.jsx — la puerta de entrada
+// =====================================================================
+// SIMECO GESTIÓN · Guardia.jsx — la puerta de entrada
 //
 // QUÉ HACE
 // --------
