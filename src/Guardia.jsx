@@ -103,6 +103,11 @@ function Login() {
         onSubmit={entrar}
         className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-7 shadow-sm"
       >
+        <img
+          src="/logo-simeco.png"
+          alt="SIMECO Ingeniería para la Industria"
+          className="mb-5 h-11 w-auto"
+        />
         <h1 className="text-lg font-semibold tracking-tight text-slate-900">
           SIMECO Gestión
         </h1>
@@ -119,7 +124,7 @@ function Login() {
           autoComplete="username"
           value={correo}
           onChange={(e) => setCorreo(e.target.value)}
-          className="mb-4 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+          className="mb-4 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-[#1F3088] focus:ring-1 focus:ring-[#1F3088]"
         />
 
         <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -131,7 +136,7 @@ function Login() {
           autoComplete="current-password"
           value={clave}
           onChange={(e) => setClave(e.target.value)}
-          className="mb-5 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+          className="mb-5 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-[#1F3088] focus:ring-1 focus:ring-[#1F3088]"
         />
 
         {error && (
@@ -143,30 +148,22 @@ function Login() {
         <button
           type="submit"
           disabled={entrando}
-          className="w-full rounded-md bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:opacity-50"
+          className="w-full rounded-md bg-[#1F3088] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#17296C] disabled:opacity-50"
         >
           {entrando ? "Entrando…" : "Entrar"}
         </button>
 
         <p className="mt-5 text-center text-[11px] leading-relaxed text-slate-400">
-          ¿Sin cuenta o clave olvidada? Las cuentas se crean desde el panel
-          de Supabase.
+          ¿Sin cuenta o clave olvidada? Las cuentas las crea la Dirección.
+        </p>
+        <p className="mt-3 border-t border-slate-100 pt-3 text-center text-[10px] leading-relaxed text-slate-400">
+          SIMECO Ingeniería S.A.S. · NIT 805.008.141-7
+          <br />
+          ISO 9001 GC 662 · ISO 14001 GA 569 · ISO 45001 GS 1369 · RUC
         </p>
       </form>
     </div>
   );
 }
 
-/* -------------------------------------------------------------------- */
-
-function BotonSalir({ correo }) {
-  return (
-    <button
-      onClick={() => supabase.auth.signOut()}
-      title={correo}
-      className="fixed bottom-4 right-4 z-50 rounded-full border border-slate-300 bg-white/90 px-3.5 py-1.5 text-xs font-semibold text-slate-600 shadow-sm backdrop-blur transition hover:bg-white hover:text-slate-900"
-    >
-      Salir
-    </button>
-  );
-}
+/* --------------------------------------------------
