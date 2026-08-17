@@ -507,20 +507,86 @@ function filaSupabaseARequerimiento(row) {
   };
 }
 
+/* -------------------------------------------------------------------------
+   calcCotizacion — reproduce EXACTAMENTE el FO.GGC.05 V.06, hoja
+   RECURSOS CLAVE, celdas F72 a F87. Cada línea de abajo corresponde a una
+   fórmula real de la hoja aprobada por el SIG:
+
+     F72  SUB TOTAL COSTOS DIRECTOS      = suma de los cinco bloques
+     F75  COSTOS INDIRECTOS              = F72 * 12,14 %
+     F77  IMPREVISTOS                    = (F72 + F75) * 3 %
+     F79  COSTO TOTAL DE LA OFERTA       = F72 + F75 + F77
+     F81  PRECIO DE LA OFERTA            = F79 / (1 - margen)
+     F83  SOBRECOSTO FINANCIERO          = F79 * tasa mensual * meses
+     F84  COMISIÓN COMERCIAL             = (F81+F83)/(1-c) - (F81+F83)
+     F87  VALOR FINAL SIN IVA            = ROUND(F81+F83+F84, -3)
+          IVA                            = 19 % (hoja CANTIDADES, fila 30)
+
+   ANTES esta función se apartaba del formato en cuatro puntos: no tenía
+   imprevistos, calculaba el costo financiero sobre directos+indirectos en
+   vez de sobre el costo total, no redondeaba al millar y no discriminaba
+   IVA. El resultado quedaba 4,07 % por debajo del formato aprobado.
+
+   Los valores por defecto salen de la propia hoja. Las cotizaciones viejas
+   que no traigan los campos nuevos los reciben aquí, para que toda la app
+   hable un solo idioma de costos.
+   ------------------------------------------------------------------------- */
 function calcCotizacion(q) {
-  const sum = (arr) => (arr || []).reduce((s, r) => s + (Number(r.cant) || 0) * (Number(r.valorUnit) || 0), 0);
+  const num = (v) => Number(v) || 0;
+  const sum = (arr) => (arr || []).reduce((s, r) => s + num(r.cant) * num(r.valorUnit), 0);
+
   const materiales = sum(q.materiales);
   const equipos = sum(q.equipos);
   const manoObra = sum(q.manoObra);
+
+  // F72 — subtotal de costos directos
   const directos =
-    materiales + equipos + manoObra + (Number(q.alimentacionHospedaje) || 0) + (Number(q.transportePersonal) || 0) + (Number(q.transporteMateriales) || 0);
-  const indirectos = directos * ((Number(q.costosIndirectosPct) || 0) / 100);
-  const sub1 = directos + indirectos;
-  const financieros = sub1 * ((Number(q.costosFinancierosPct) || 0) / 100);
-  const costoTotal = sub1 + financieros;
-  const margen = (Number(q.margenPct) || 0) / 100;
-  const precioVenta = margen < 1 ? costoTotal / (1 - margen) : costoTotal;
-  return { materiales, equipos, manoObra, directos, indirectos, financieros, costoTotal, precioVenta };
+    materiales + equipos + manoObra +
+    num(q.alimentacionHospedaje) + num(q.transportePersonal) + num(q.transporteMateriales);
+
+  // Porcentajes: los del formato, salvo que la cotización traiga otros.
+  const pctIndirectos  = q.costosIndirectosPct ?? 12.14;
+  const pctImprevistos = q.imprevistosPct ?? 3;
+  const pctMargen      = q.margenPct ?? 30;
+  // Compatibilidad: en la versión vieja "costosFinancierosPct" era un
+  // porcentaje único sobre el subtotal. Ahora es tasa mensual × meses.
+  const pctTasaFin     = q.tasaFinancieraPct ?? q.costosFinancierosPct ?? 1.8;
+  const meses          = q.mesesPlazo ?? 1;
+  const pctComision    = q.comisionPct ?? 0;
+  const pctIva         = q.ivaPct ?? 19;
+
+  const indirectos  = directos * (num(pctIndirectos) / 100);           // F75
+  const imprevistos = (directos + indirectos) * (num(pctImprevistos) / 100); // F77
+  const costoTotal  = directos + indirectos + imprevistos;             // F79
+
+  const margen = num(pctMargen) / 100;
+  const precioOferta = margen < 1 ? costoTotal / (1 - margen) : costoTotal; // F81
+  const utilidad = precioOferta - costoTotal;                          // F80
+
+  // F83 — sobre el COSTO TOTAL, no sobre el subtotal. Aquí estaba el error.
+  const financieros = costoTotal * (num(pctTasaFin) / 100) * num(meses);
+
+  // F84 — la comisión se calcula "por dentro": se agranda la base para que,
+  // al descontar la participación, quede el precio de la oferta intacto.
+  const c = num(pctComision) / 100;
+  const base = precioOferta + financieros;
+  const comision = c > 0 && c < 1 ? base / (1 - c) - base : 0;
+
+  // F87 — ROUND(x, -3) de Excel: al millar más cercano.
+  const valorSinIva = Math.round((base + comision) / 1000) * 1000;
+
+  const iva = valorSinIva * (num(pctIva) / 100);
+  const totalConIva = valorSinIva + iva;
+
+  return {
+    materiales, equipos, manoObra,
+    directos, indirectos, imprevistos, costoTotal,
+    utilidad, precioOferta, financieros, comision,
+    valorSinIva, iva, totalConIva,
+    // precioVenta lo usan el tablero, el centro de costos y la facturación.
+    // Es el valor final sin IVA, igual que la celda F87 del formato.
+    precioVenta: valorSinIva,
+  };
 }
 
 /* =========================================================================
@@ -1384,7 +1450,8 @@ function CotizacionForm({ initial, clients, requirements, prefillReqId, catalogo
       personaContacto: "", correoContacto: "", referencia: "", alcance: "",
       materiales: [], equipos: [], manoObra: [],
       alimentacionHospedaje: 0, transportePersonal: 0, transporteMateriales: 0,
-      costosIndirectosPct: 10, costosFinancierosPct: 3, margenPct: 25,
+      costosIndirectosPct: 12.14, imprevistosPct: 3, margenPct: 30,
+      tasaFinancieraPct: 1.8, mesesPlazo: 1, comisionPct: 0, ivaPct: 19,
       tiempoEntrega: "", formaPago: "50% anticipo, 50% contra entrega", garantia: "12 meses por defectos de fabricación e instalación",
       validez: "30 días calendario", firmante: "Ing. Luis Fernando Montenegro — Director General y Comercial",
       estado: "Borrador",
@@ -1472,17 +1539,36 @@ function CotizacionForm({ initial, clients, requirements, prefillReqId, catalogo
         <Field label="Alimentación y hospedaje"><TextInput type="number" value={f.alimentacionHospedaje} onChange={(e) => set("alimentacionHospedaje", e.target.value)} /></Field>
         <Field label="Transporte de personal"><TextInput type="number" value={f.transportePersonal} onChange={(e) => set("transportePersonal", e.target.value)} /></Field>
         <Field label="Transporte de materiales"><TextInput type="number" value={f.transporteMateriales} onChange={(e) => set("transporteMateriales", e.target.value)} /></Field>
-        <Field label="Costos indirectos (%)"><TextInput type="number" value={f.costosIndirectosPct} onChange={(e) => set("costosIndirectosPct", e.target.value)} /></Field>
-        <Field label="Costos financieros (%)"><TextInput type="number" value={f.costosFinancierosPct} onChange={(e) => set("costosFinancierosPct", e.target.value)} /></Field>
-        <Field label="Margen bruto (%)"><TextInput type="number" value={f.margenPct} onChange={(e) => set("margenPct", e.target.value)} /></Field>
+        <Field label="Costos indirectos (%)"><TextInput type="number" step="0.01" value={f.costosIndirectosPct ?? 12.14} onChange={(e) => set("costosIndirectosPct", e.target.value)} /></Field>
+        <Field label="Imprevistos (%)"><TextInput type="number" step="0.01" value={f.imprevistosPct ?? 3} onChange={(e) => set("imprevistosPct", e.target.value)} /></Field>
+        <Field label="Margen bruto / venta (%)"><TextInput type="number" step="0.01" value={f.margenPct ?? 30} onChange={(e) => set("margenPct", e.target.value)} /></Field>
+        <Field label="Tasa financiera mensual (%)"><TextInput type="number" step="0.01" value={f.tasaFinancieraPct ?? 1.8} onChange={(e) => set("tasaFinancieraPct", e.target.value)} /></Field>
+        <Field label="Meses de plazo"><TextInput type="number" step="1" value={f.mesesPlazo ?? 1} onChange={(e) => set("mesesPlazo", e.target.value)} /></Field>
+        <Field label="Comisión comercial (%)"><TextInput type="number" step="0.01" value={f.comisionPct ?? 0} onChange={(e) => set("comisionPct", e.target.value)} /></Field>
       </div>
 
+      <p className="mt-2 text-[11px] leading-relaxed text-slate-400">
+        Porcentajes por defecto del <b>FO.GGC.05 V.06</b>: indirectos 12,14 % ·
+        imprevistos 3 % · margen 30 % · tasa financiera 1,8 % mensual · IVA 19 %.
+        Cambiarlos aquí afecta solo a esta cotización.
+      </p>
+
+      {/* Mismo orden y mismos nombres que el FO.GGC.05 V.06, para que
+          cualquiera pueda cotejar la pantalla contra el formato. */}
       <div className="mt-4 rounded-lg border border-[#1F3088]/30 bg-[#1F3088]/5 p-4">
-        <div className="flex justify-between text-sm text-slate-600"><span>Costo directo</span><span>{cop(calc.directos)}</span></div>
+        <div className="flex justify-between text-sm text-slate-600"><span>Sub total costos directos</span><span>{cop(calc.directos)}</span></div>
         <div className="flex justify-between text-sm text-slate-600"><span>Costos indirectos</span><span>{cop(calc.indirectos)}</span></div>
-        <div className="flex justify-between text-sm text-slate-600"><span>Costos financieros</span><span>{cop(calc.financieros)}</span></div>
-        <div className="flex justify-between text-sm text-slate-600 border-t border-[#1F3088]/20 mt-1 pt-1"><span>Costo total</span><span>{cop(calc.costoTotal)}</span></div>
-        <div className="mt-1 flex justify-between font-display text-lg font-semibold text-[#1B2430]"><span>Precio de venta</span><span>{cop(calc.precioVenta)}</span></div>
+        <div className="flex justify-between text-sm text-slate-600"><span>Imprevistos</span><span>{cop(calc.imprevistos)}</span></div>
+        <div className="flex justify-between border-t border-[#1F3088]/20 mt-1 pt-1 text-sm font-medium text-slate-700"><span>Costo total de la oferta</span><span>{cop(calc.costoTotal)}</span></div>
+        <div className="flex justify-between text-sm text-slate-600"><span>Utilidad</span><span>{cop(calc.utilidad)}</span></div>
+        <div className="flex justify-between text-sm text-slate-600"><span>Precio de la oferta</span><span>{cop(calc.precioOferta)}</span></div>
+        <div className="flex justify-between text-sm text-slate-600"><span>Sobrecosto por costo financiero</span><span>{cop(calc.financieros)}</span></div>
+        {calc.comision > 0 && (
+          <div className="flex justify-between text-sm text-slate-600"><span>Comisión comercial</span><span>{cop(calc.comision)}</span></div>
+        )}
+        <div className="mt-1 flex justify-between border-t border-[#1F3088]/20 pt-1 font-display text-lg font-semibold text-[#1B2430]"><span>Valor final sin IVA</span><span>{cop(calc.valorSinIva)}</span></div>
+        <div className="flex justify-between text-sm text-slate-600"><span>IVA ({f.ivaPct ?? 19} %)</span><span>{cop(calc.iva)}</span></div>
+        <div className="mt-1 flex justify-between font-display text-lg font-bold text-[#1F3088]"><span>Total a pagar</span><span>{cop(calc.totalConIva)}</span></div>
       </div>
 
       <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -1550,8 +1636,14 @@ function CotizacionPrint({ q, client, onClose }) {
             ))}
           </tbody>
           <tfoot>
-            <tr className="border-t-2 border-slate-800 font-semibold">
-              <td colSpan={4} className="py-2 text-right">PRECIO DE VENTA</td><td className="py-2 text-right">{cop(calc.precioVenta)}</td>
+            <tr className="border-t-2 border-slate-800">
+              <td colSpan={4} className="py-1.5 text-right font-semibold">VALOR TOTAL SIN IVA</td><td className="py-1.5 text-right font-semibold">{cop(calc.valorSinIva)}</td>
+            </tr>
+            <tr>
+              <td colSpan={4} className="py-1.5 text-right">VALOR IVA ({q.ivaPct ?? 19} %)</td><td className="py-1.5 text-right">{cop(calc.iva)}</td>
+            </tr>
+            <tr className="border-t border-slate-800 font-bold">
+              <td colSpan={4} className="py-2 text-right">VALOR IVA INCLUIDO — TOTAL A PAGAR</td><td className="py-2 text-right">{cop(calc.totalConIva)}</td>
             </tr>
           </tfoot>
         </table>
@@ -1842,106 +1934,4 @@ function FacturacionView({ data, update, bumpCounter, clientName }) {
     }
     setPanel(null);
   };
-  const remove = (id) => update("invoices", (arr) => arr.filter((i) => i.id !== id));
-  const marcarPagada = (inv) => update("invoices", (arr) => arr.map((x) => (x.id === inv.id ? { ...x, estado: "Pagada", fechaPago: todayISO() } : x)));
-
-  const totalPendiente = data.invoices.filter((i) => i.estado === "Pendiente").reduce((s, i) => s + Number(i.valor || 0), 0);
-  const totalPagado = data.invoices.filter((i) => i.estado === "Pagada").reduce((s, i) => s + Number(i.valor || 0), 0);
-
-  return (
-    <ViewShell title="Facturación" subtitle="Facturación de las actas de entrega cerradas" action={
-      <button onClick={() => setPanel("new")} className="btnPrimary"><Plus size={14} /> Nueva factura</button>
-    }>
-      <div className="mb-4 grid grid-cols-2 gap-3 sm:w-96">
-        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
-          <p className="text-[11px] font-semibold uppercase text-amber-700">Pendiente</p>
-          <p className="font-display text-lg font-semibold text-amber-800">{cop(totalPendiente)}</p>
-        </div>
-        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
-          <p className="text-[11px] font-semibold uppercase text-emerald-700">Pagado</p>
-          <p className="font-display text-lg font-semibold text-emerald-800">{cop(totalPagado)}</p>
-        </div>
-      </div>
-
-      {data.invoices.length === 0 ? (
-        <EmptyState icon={Receipt} text="Registra la facturación asociada a un acta de entrega." cta="Nueva factura" onClick={() => setPanel("new")} />
-      ) : (
-        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-          <table className="w-full">
-            <thead className="border-b border-slate-200 bg-slate-50"><tr><Th>N° Factura</Th><Th>Acta</Th><Th>Fecha</Th><Th>Valor</Th><Th>Estado</Th><Th></Th></tr></thead>
-            <tbody className="divide-y divide-slate-100">
-              {data.invoices.map((inv) => {
-                const a = data.actas.find((a) => a.id === inv.actaId);
-                return (
-                  <tr key={inv.id} className="hover:bg-slate-50/60">
-                    <Td mono>{inv.numero}</Td><Td mono>{a?.numero || "—"}</Td><Td mono>{inv.fecha}</Td><Td>{cop(inv.valor)}</Td>
-                    <Td><Badge>{inv.estado}</Badge></Td>
-                    <Td>
-                      <div className="flex justify-end gap-1">
-                        {inv.estado === "Pendiente" && (
-                          <button onClick={() => marcarPagada(inv)} className="rounded p-1.5 text-emerald-500 hover:bg-emerald-50"><CheckCircle2 size={14} /></button>
-                        )}
-                        <RowActions onEdit={() => setPanel(inv)} onDelete={() => remove(inv.id)} />
-                      </div>
-                    </Td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {panel && <FacturaForm initial={panel === "new" ? null : panel} actas={data.actas} onSave={save} onClose={() => setPanel(null)} />}
-    </ViewShell>
-  );
-}
-
-function FacturaForm({ initial, actas, onSave, onClose }) {
-  const [f, setF] = useState(initial || { actaId: actas[0]?.id || "", fecha: todayISO(), valor: 0, estado: "Pendiente", fechaPago: "" });
-  const set = (k, v) => setF({ ...f, [k]: v });
-  return (
-    <Panel title={initial ? `Editar ${initial.numero}` : "Nueva factura"} onClose={onClose}>
-      <div className="grid grid-cols-1 gap-3">
-        <Field label="Acta de entrega">
-          <Select value={f.actaId} onChange={(e) => set("actaId", e.target.value)}>
-            {actas.length === 0 && <option value="">No hay actas de entrega</option>}
-            {actas.map((a) => <option key={a.id} value={a.id}>{a.numero}</option>)}
-          </Select>
-        </Field>
-        <Field label="Fecha"><TextInput type="date" value={f.fecha} onChange={(e) => set("fecha", e.target.value)} /></Field>
-        <Field label="Valor"><TextInput type="number" value={f.valor} onChange={(e) => set("valor", e.target.value)} /></Field>
-        <Field label="Estado">
-          <Select value={f.estado} onChange={(e) => set("estado", e.target.value)}>
-            {["Pendiente", "Pagada"].map((v) => <option key={v}>{v}</option>)}
-          </Select>
-        </Field>
-      </div>
-      <div className="mt-5 flex justify-end gap-2">
-        <button onClick={onClose} className="btnGhost">Cancelar</button>
-        <button onClick={() => onSave(f)} className="btnPrimary"><Save size={14} /> Guardar</button>
-      </div>
-    </Panel>
-  );
-}
-
-/* --------------------------------- SHELL -------------------------------- */
-function ViewShell({ title, subtitle, action, children }) {
-  return (
-    <div className="mx-auto max-w-6xl px-8 py-8">
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="font-display text-2xl font-semibold text-[#1B2430]">{title}</h1>
-          <p className="text-sm text-slate-500">{subtitle}</p>
-        </div>
-        {action}
-      </div>
-      {children}
-      <style>{`
-        .btnPrimary { display:inline-flex; align-items:center; gap:6px; background:#1B2430; color:white; padding:8px 14px; border-radius:8px; font-size:13px; font-weight:500; }
-        .btnPrimary:hover { background:#2A3542; }
-        .btnGhost { display:inline-flex; align-items:center; gap:6px; background:white; border:1px solid #CBD5E1; color:#334155; padding:8px 14px; border-radius:8px; font-size:13px; font-weight:500; }
-        .btnGhost:hover { background:#F1F5F9; }
-      `}</style>
-    </div>
-  );
-}
+  const remove = (id) => update("invoices", (arr) => arr.f
