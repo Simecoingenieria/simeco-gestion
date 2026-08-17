@@ -1934,4 +1934,106 @@ function FacturacionView({ data, update, bumpCounter, clientName }) {
     }
     setPanel(null);
   };
-  const remove = (id) => update("invoices", (arr) => arr.f
+  const remove = (id) => update("invoices", (arr) => arr.filter((i) => i.id !== id));
+  const marcarPagada = (inv) => update("invoices", (arr) => arr.map((x) => (x.id === inv.id ? { ...x, estado: "Pagada", fechaPago: todayISO() } : x)));
+
+  const totalPendiente = data.invoices.filter((i) => i.estado === "Pendiente").reduce((s, i) => s + Number(i.valor || 0), 0);
+  const totalPagado = data.invoices.filter((i) => i.estado === "Pagada").reduce((s, i) => s + Number(i.valor || 0), 0);
+
+  return (
+    <ViewShell title="Facturación" subtitle="Facturación de las actas de entrega cerradas" action={
+      <button onClick={() => setPanel("new")} className="btnPrimary"><Plus size={14} /> Nueva factura</button>
+    }>
+      <div className="mb-4 grid grid-cols-2 gap-3 sm:w-96">
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+          <p className="text-[11px] font-semibold uppercase text-amber-700">Pendiente</p>
+          <p className="font-display text-lg font-semibold text-amber-800">{cop(totalPendiente)}</p>
+        </div>
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+          <p className="text-[11px] font-semibold uppercase text-emerald-700">Pagado</p>
+          <p className="font-display text-lg font-semibold text-emerald-800">{cop(totalPagado)}</p>
+        </div>
+      </div>
+
+      {data.invoices.length === 0 ? (
+        <EmptyState icon={Receipt} text="Registra la facturación asociada a un acta de entrega." cta="Nueva factura" onClick={() => setPanel("new")} />
+      ) : (
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <table className="w-full">
+            <thead className="border-b border-slate-200 bg-slate-50"><tr><Th>N° Factura</Th><Th>Acta</Th><Th>Fecha</Th><Th>Valor</Th><Th>Estado</Th><Th></Th></tr></thead>
+            <tbody className="divide-y divide-slate-100">
+              {data.invoices.map((inv) => {
+                const a = data.actas.find((a) => a.id === inv.actaId);
+                return (
+                  <tr key={inv.id} className="hover:bg-slate-50/60">
+                    <Td mono>{inv.numero}</Td><Td mono>{a?.numero || "—"}</Td><Td mono>{inv.fecha}</Td><Td>{cop(inv.valor)}</Td>
+                    <Td><Badge>{inv.estado}</Badge></Td>
+                    <Td>
+                      <div className="flex justify-end gap-1">
+                        {inv.estado === "Pendiente" && (
+                          <button onClick={() => marcarPagada(inv)} className="rounded p-1.5 text-emerald-500 hover:bg-emerald-50"><CheckCircle2 size={14} /></button>
+                        )}
+                        <RowActions onEdit={() => setPanel(inv)} onDelete={() => remove(inv.id)} />
+                      </div>
+                    </Td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {panel && <FacturaForm initial={panel === "new" ? null : panel} actas={data.actas} onSave={save} onClose={() => setPanel(null)} />}
+    </ViewShell>
+  );
+}
+
+function FacturaForm({ initial, actas, onSave, onClose }) {
+  const [f, setF] = useState(initial || { actaId: actas[0]?.id || "", fecha: todayISO(), valor: 0, estado: "Pendiente", fechaPago: "" });
+  const set = (k, v) => setF({ ...f, [k]: v });
+  return (
+    <Panel title={initial ? `Editar ${initial.numero}` : "Nueva factura"} onClose={onClose}>
+      <div className="grid grid-cols-1 gap-3">
+        <Field label="Acta de entrega">
+          <Select value={f.actaId} onChange={(e) => set("actaId", e.target.value)}>
+            {actas.length === 0 && <option value="">No hay actas de entrega</option>}
+            {actas.map((a) => <option key={a.id} value={a.id}>{a.numero}</option>)}
+          </Select>
+        </Field>
+        <Field label="Fecha"><TextInput type="date" value={f.fecha} onChange={(e) => set("fecha", e.target.value)} /></Field>
+        <Field label="Valor"><TextInput type="number" value={f.valor} onChange={(e) => set("valor", e.target.value)} /></Field>
+        <Field label="Estado">
+          <Select value={f.estado} onChange={(e) => set("estado", e.target.value)}>
+            {["Pendiente", "Pagada"].map((v) => <option key={v}>{v}</option>)}
+          </Select>
+        </Field>
+      </div>
+      <div className="mt-5 flex justify-end gap-2">
+        <button onClick={onClose} className="btnGhost">Cancelar</button>
+        <button onClick={() => onSave(f)} className="btnPrimary"><Save size={14} /> Guardar</button>
+      </div>
+    </Panel>
+  );
+}
+
+/* --------------------------------- SHELL -------------------------------- */
+function ViewShell({ title, subtitle, action, children }) {
+  return (
+    <div className="mx-auto max-w-6xl px-8 py-8">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="font-display text-2xl font-semibold text-[#1B2430]">{title}</h1>
+          <p className="text-sm text-slate-500">{subtitle}</p>
+        </div>
+        {action}
+      </div>
+      {children}
+      <style>{`
+        .btnPrimary { display:inline-flex; align-items:center; gap:6px; background:#1B2430; color:white; padding:8px 14px; border-radius:8px; font-size:13px; font-weight:500; }
+        .btnPrimary:hover { background:#2A3542; }
+        .btnGhost { display:inline-flex; align-items:center; gap:6px; background:white; border:1px solid #CBD5E1; color:#334155; padding:8px 14px; border-radius:8px; font-size:13px; font-weight:500; }
+        .btnGhost:hover { background:#F1F5F9; }
+      `}</style>
+    </div>
+  );
+}
