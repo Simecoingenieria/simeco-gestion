@@ -1320,6 +1320,8 @@ function CotizacionesView({ data, update, bumpCounter, clientName, prefillReqId,
   const [printQ, setPrintQ] = useState(null);
   const [filterEstado, setFilterEstado] = useState("Todas");
   const [filterClient, setFilterClient] = useState("Todos");
+  const [emitiendo, setEmitiendo] = useState(null);   // id de la que se está emitiendo
+  const [decidiendo, setDecidiendo] = useState(null); // cotización a la que se le registra la decisión
 
   // Si llegamos aquí desde el botón "Cotizar" de un Requerimiento,
   // abrimos automáticamente el panel de nueva cotización.
@@ -1333,18 +1335,143 @@ function CotizacionesView({ data, update, bumpCounter, clientName, prefillReqId,
     .filter((q) => filterClient === "Todos" || q.clientId === filterClient)
     .sort((a, b) => (a.fecha < b.fecha ? 1 : -1));
 
+  // -------------------------------------------------------------------
+  // GUARDAR  —  una cotización nueva nace SIN consecutivo.
+  //
+  // Antes el número se asignaba al crear el borrador. Eso quema números
+  // en cotizaciones que nunca se envían, y así aparecen los huecos que
+  // tiene el histórico de 2026 (faltan la 13, la 124, la 125 y la 250).
+  //
+  // Ahora el número se pide al EMITIR, que es cuando la cotización
+  // realmente sale hacia el cliente.
+  // -------------------------------------------------------------------
   const save = (q) => {
     if (q.id) {
       update("quotations", (arr) => arr.map((x) => (x.id === q.id ? q : x)));
     } else {
-      const n = bumpCounter("cot");
-      const consecutivo = `COT-${String(n).padStart(3, "0")}-${yy()}`;
       update("quotations", (arr) => [
         ...arr,
-        { ...q, id: uid(), consecutivo, historial: [{ fecha: todayISO(), evento: "Cotización creada" }] },
+        {
+          ...q,
+          id: uid(),
+          consecutivo: "",
+          estado: "Borrador",
+          historial: [{ fecha: todayISO(), evento: "Borrador creado" }],
+        },
       ]);
     }
     setPanel(null);
+  };
+
+  // -------------------------------------------------------------------
+  // EMITIR  —  el momento en que la cotización deja de ser un borrador.
+  //
+  // Una sola llamada a la base hace las dos cosas a la vez: entrega el
+  // número y escribe la fila del FO.GGC.07. PostgreSQL las trata como
+  // una operación indivisible, así que nunca queda un número sin registro
+  // ni un registro sin número.
+  // -------------------------------------------------------------------
+  const emitir = async (q) => {
+    if (q.consecutivo) return;
+    const cli = data.clients.find((c) => c.id === q.clientId);
+    if (!cli) {
+      alert("La cotización necesita un cliente antes de emitirse.");
+      return;
+    }
+    const calc = calcCotizacion(q);
+    const ok = window.confirm(
+      `¿Emitir esta cotización?\n\n` +
+      `Cliente: ${cli.nombre}\n` +
+      `Referencia: ${q.referencia || "(sin referencia)"}\n` +
+      `Valor sin IVA: ${cop(calc.valorSinIva)}\n\n` +
+      `Se le asignará el consecutivo definitivo y quedará registrada en el ` +
+      `FO.GGC.07. El número no se puede cambiar después.`
+    );
+    if (!ok) return;
+
+    setEmitiendo(q.id);
+    try {
+      const { data: res, error } = await supabase.rpc("emitir_cotizacion", {
+        p_cliente: cli.nombre,
+        p_contacto: q.personaContacto || cli.contactoNombre || null,
+        p_cargo: cli.contactoCargo || null,
+        p_referencia: q.referencia || null,
+        p_valor: calc.valorSinIva,
+        p_fecha_contacto: q.fecha || null,
+        p_fecha_propuesta: q.fecha || null,
+        p_quotation_id: q.id,
+        p_observaciones: null,
+        p_anio: null,
+      });
+      if (error) throw error;
+      const fila = Array.isArray(res) ? res[0] : res;
+      if (!fila?.consecutivo) throw new Error("La base no devolvió consecutivo.");
+
+      update("quotations", (arr) =>
+        arr.map((x) =>
+          x.id === q.id
+            ? {
+                ...x,
+                consecutivo: fila.consecutivo,
+                numero: fila.numero,
+                estado: "Enviada",
+                fechaEmision: todayISO(),
+                historial: [
+                  ...(x.historial || []),
+                  { fecha: todayISO(), evento: `Emitida con consecutivo ${fila.consecutivo}` },
+                ],
+              }
+            : x
+        )
+      );
+    } catch (err) {
+      alert(
+        "No se pudo emitir la cotización.\n\n" +
+        (err?.message || String(err)) +
+        "\n\nNo se asignó ningún número: la base deshizo todo. Puedes intentar de nuevo."
+      );
+    } finally {
+      setEmitiendo(null);
+    }
+  };
+
+  // -------------------------------------------------------------------
+  // REGISTRAR LA DECISIÓN DEL CLIENTE
+  //
+  // Aquí está el arreglo del hallazgo que más pesa: en el Excel las
+  // columnas de aprobación reciben chulos en vez de datos, y por eso la
+  // efectividad de 2026 puede leerse como 36 % o como 66 %.
+  // La base exige los tres datos juntos: decisión, fecha y medio.
+  // -------------------------------------------------------------------
+  const guardarDecision = async (q, aceptada, fecha, medio, observacion) => {
+    const { error } = await supabase.rpc("registrar_decision_cotizacion", {
+      p_quotation_id: q.id,
+      p_aceptada: aceptada,
+      p_fecha: fecha,
+      p_medio: medio,
+      p_observacion: observacion || null,
+    });
+    if (error) {
+      alert("No se pudo registrar la decisión.\n\n" + error.message);
+      return false;
+    }
+    const estado = aceptada === "SI" ? "Aprobada" : "Rechazada";
+    update("quotations", (arr) =>
+      arr.map((x) =>
+        x.id === q.id
+          ? {
+              ...x,
+              estado,
+              decision: { aceptada, fecha, medio, observacion: observacion || "" },
+              historial: [
+                ...(x.historial || []),
+                { fecha: todayISO(), evento: `${estado} — ${medio}, ${fecha}` },
+              ],
+            }
+          : x
+      )
+    );
+    return true;
   };
   const remove = (id) => update("quotations", (arr) => arr.filter((q) => q.id !== id));
 
@@ -1399,7 +1526,15 @@ function CotizacionesView({ data, update, bumpCounter, clientName, prefillReqId,
                 const { precioVenta } = calcCotizacion(q);
                 return (
                   <tr key={q.id} className="hover:bg-slate-50/60">
-                    <Td mono>{q.consecutivo}</Td>
+                    <Td mono>
+                      {q.consecutivo ? (
+                        q.consecutivo
+                      ) : (
+                        <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">
+                          Sin emitir
+                        </span>
+                      )}
+                    </Td>
                     <Td>{clientName(q.clientId)}</Td>
                     <Td>{q.referencia}</Td>
                     <Td mono>{q.fecha}</Td>
@@ -1410,7 +1545,38 @@ function CotizacionesView({ data, update, bumpCounter, clientName, prefillReqId,
                       </select>
                     </Td>
                     <Td>
-                      <div className="flex justify-end gap-1">
+                      <div className="flex items-center justify-end gap-1">
+                        {!q.consecutivo && (
+                          <button
+                            onClick={() => emitir(q)}
+                            disabled={emitiendo === q.id}
+                            title="Asignar consecutivo y registrar en el FO.GGC.07"
+                            className="rounded-md bg-[#1F3088] px-2.5 py-1 text-[11px] font-semibold text-white transition hover:bg-[#17296C] disabled:opacity-50"
+                          >
+                            {emitiendo === q.id ? "Emitiendo…" : "Emitir"}
+                          </button>
+                        )}
+                        {q.consecutivo && !q.decision && (
+                          <button
+                            onClick={() => setDecidiendo(q)}
+                            title="Registrar si el cliente la aceptó o la rechazó"
+                            className="rounded-md border border-[#1F3088]/40 px-2.5 py-1 text-[11px] font-semibold text-[#1F3088] transition hover:bg-[#1F3088]/5"
+                          >
+                            Registrar decisión
+                          </button>
+                        )}
+                        {q.decision && (
+                          <span
+                            title={`${q.decision.medio} · ${q.decision.fecha}`}
+                            className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                              q.decision.aceptada === "SI"
+                                ? "bg-emerald-50 text-emerald-700"
+                                : "bg-rose-50 text-rose-700"
+                            }`}
+                          >
+                            {q.decision.aceptada === "SI" ? "Aceptada" : "No aceptada"}
+                          </span>
+                        )}
                         <button onClick={() => setPrintQ(q)} className="rounded p-1.5 text-slate-500 hover:bg-slate-100"><Printer size={14} /></button>
                         <RowActions onEdit={() => setPanel(q)} onDelete={() => remove(q.id)} />
                       </div>
@@ -1438,6 +1604,17 @@ function CotizacionesView({ data, update, bumpCounter, clientName, prefillReqId,
         />
       )}
       {printQ && <CotizacionPrint q={printQ} client={data.clients.find((c) => c.id === printQ.clientId)} onClose={() => setPrintQ(null)} />}
+      {decidiendo && (
+        <PanelDecision
+          q={decidiendo}
+          cliente={clientName(decidiendo.clientId)}
+          onGuardar={async (aceptada, fecha, medio, obs) => {
+            const ok = await guardarDecision(decidiendo, aceptada, fecha, medio, obs);
+            if (ok) setDecidiendo(null);
+          }}
+          onClose={() => setDecidiendo(null)}
+        />
+      )}
     </ViewShell>
   );
 }
@@ -1582,6 +1759,81 @@ function CotizacionForm({ initial, clients, requirements, prefillReqId, catalogo
       <div className="mt-5 flex justify-end gap-2">
         <button onClick={onClose} className="btnGhost">Cancelar</button>
         <button onClick={() => onSave(f)} className="btnPrimary"><Save size={14} /> Guardar cotización</button>
+      </div>
+    </Panel>
+  );
+}
+
+/* -------------------------------------------------------------------------
+   PANEL DE DECISIÓN DEL CLIENTE
+
+   Los tres campos son obligatorios a propósito. En el Excel actual estas
+   casillas reciben una "X" y nada más, y por eso SIMECO no puede afirmar
+   con certeza su tasa de cierre: sobre $14.846 millones cotizados en 2026,
+   la efectividad se lee como 36 % o como 66 % según qué columna se crea.
+
+   Un chulo no dice cuándo se ganó ni por qué medio. Estos tres datos sí.
+   ------------------------------------------------------------------------- */
+const MEDIOS_APROBACION = [
+  "Orden de compra",
+  "Correo electrónico",
+  "WhatsApp",
+  "Verbal / telefónico",
+  "Acta o documento firmado",
+  "Portal del cliente",
+];
+
+function PanelDecision({ q, cliente, onGuardar, onClose }) {
+  const [aceptada, setAceptada] = useState("SI");
+  const [fecha, setFecha] = useState(todayISO());
+  const [medio, setMedio] = useState(MEDIOS_APROBACION[0]);
+  const [obs, setObs] = useState("");
+  const [guardando, setGuardando] = useState(false);
+
+  const enviar = async () => {
+    setGuardando(true);
+    await onGuardar(aceptada, fecha, medio, obs);
+    setGuardando(false);
+  };
+
+  return (
+    <Panel
+      title={`Decisión del cliente — ${q.consecutivo}`}
+      subtitle={`${cliente} · ${q.referencia || "sin referencia"}`}
+      onClose={onClose}
+    >
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field label="¿El cliente la aceptó?">
+          <Select value={aceptada} onChange={(e) => setAceptada(e.target.value)}>
+            <option value="SI">Sí, la aceptó</option>
+            <option value="NO">No la aceptó</option>
+          </Select>
+        </Field>
+        <Field label="Fecha de la decisión">
+          <TextInput type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} />
+        </Field>
+        <Field label="¿Por qué medio lo comunicó?" span>
+          <Select value={medio} onChange={(e) => setMedio(e.target.value)}>
+            {MEDIOS_APROBACION.map((m) => <option key={m}>{m}</option>)}
+          </Select>
+        </Field>
+        <Field label="Observación (opcional)" span>
+          <TextArea value={obs} onChange={(e) => setObs(e.target.value)} className="min-h-[70px]"
+            placeholder="Número de orden de compra, condición pactada, motivo del rechazo…" />
+        </Field>
+      </div>
+
+      <p className="mt-3 text-[11px] leading-relaxed text-slate-400">
+        Estos tres datos quedan en el <b>FO.GGC.07 Registro de Control de
+        Cotizaciones</b> y son los que hacen que el indicador de efectividad
+        del proceso comercial sea un dato y no una interpretación.
+      </p>
+
+      <div className="mt-5 flex justify-end gap-2">
+        <button onClick={onClose} className="btnGhost">Cancelar</button>
+        <button onClick={enviar} disabled={guardando} className="btnPrimary">
+          <Save size={14} /> {guardando ? "Guardando…" : "Registrar decisión"}
+        </button>
       </div>
     </Panel>
   );
